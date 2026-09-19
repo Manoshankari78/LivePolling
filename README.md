@@ -1,33 +1,77 @@
-# Live Polling Tool
+# Live Polling
 
-A production-oriented real-time polling application built for the GUVI Developer Internship task.
+A real-time polling platform that lets authenticated creators publish polls, share public voting links, and watch results update instantly as votes arrive.
 
-## Overview
+> **Create a poll → Share the link → Collect votes → Watch results live**
 
-The application implements:
+Built with React, Go, MongoDB, Redis Pub/Sub, and WebSockets.
 
-**Create Poll → Share Link → Audience Votes → Results Update Live**
+## Features
 
-Authenticated creators register/login with JWT, create and manage polls, share a public poll URL, and watch results update in real time. Audience members vote without an account. MongoDB persists users, polls, and votes. Redis Pub/Sub distributes vote events between backend instances, and WebSockets push those events to connected React clients.
+- Creator registration and JWT-based authentication
+- Create, edit, close, and delete polls
+- Public poll pages that do not require audience accounts
+- Anonymous voting with browser-based voter identification
+- Duplicate-vote prevention enforced by MongoDB
+- Optional poll expiration
+- Live result updates over WebSockets
+- Redis Pub/Sub support for multi-instance backend deployments
+- Creator dashboard for managing polls
+- Backend validation, ownership checks, CORS protection, and rate limiting
+- Responsive React frontend with human-readable error messages
 
-## Tech Stack
+## How It Works
 
-- Frontend: React + Vite
-- Backend: Go + Gin
-- Database: MongoDB
-- Realtime: Redis Pub/Sub + WebSocket
-- Authentication: JWT
-- Password hashing: bcrypt
-- Local infrastructure: Docker Compose
-  
-### REST vs WebSocket
+1. A creator registers or signs in.
+2. The creator creates a poll and shares its public URL.
+3. Audience members vote without creating an account.
+4. The backend validates and persists each vote in MongoDB.
+5. Redis Pub/Sub distributes the updated result across backend instances.
+6. WebSocket connections broadcast the latest results to connected viewers.
 
-REST is used for request/response operations: registration, login, poll management, reading a poll, and submitting a vote. WebSocket is used only for server-to-client live result delivery. Redis Pub/Sub decouples persistence from the realtime broadcast layer and also allows multiple backend instances to receive the same poll event.
+MongoDB is the source of truth. The frontend never calculates or trusts vote totals locally.
+
+## Architecture
+
+```text
+React + Vite
+    │
+    ├── REST API ───────────────┐
+    └── WebSocket connection    │
+                                ▼
+                         Go + Gin API
+                           │       │
+                           │       ├── MongoDB
+                           │       │    Users, polls, votes
+                           │       │
+                           │       └── Redis Pub/Sub
+                           │            Cross-instance events
+                           ▼
+                     WebSocket Hub
+                       Live results
+```
+
+### REST and WebSockets
+
+REST handles request/response operations such as authentication, poll management, reading polls, and submitting votes. WebSockets are used only for server-to-client live result delivery. Redis Pub/Sub allows every backend instance to receive the same poll update and notify its connected clients.
+
+## Technology Stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | React, Vite |
+| Backend | Go, Gin |
+| Database | MongoDB |
+| Realtime messaging | Redis Pub/Sub |
+| Client updates | WebSocket |
+| Authentication | JWT |
+| Password security | bcrypt |
+| Local infrastructure | Docker Compose |
 
 ## Project Structure
 
 ```text
-live-polling-app/
+.
 ├── backend/
 │   ├── cmd/server/main.go
 │   ├── config/
@@ -59,90 +103,86 @@ live-polling-app/
 └── README.md
 ```
 
-## Database Design
+## Getting Started
 
-### users
+### Prerequisites
 
-- `_id`
-- `name`
-- `email` — unique index
-- `passwordHash`
-- `createdAt`
-- `updatedAt`
+- Go 1.20+
+- Node.js 18+
+- Docker and Docker Compose
 
-### polls
+### 1. Start the infrastructure
 
-- `_id`
-- `creatorId`
-- `question`
-- `options[]` with `id`, `text`, and `votes`
-- `status` — active/closed
-- `createdAt`
-- `updatedAt`
-- `expiresAt` — optional
+From the repository root, start MongoDB and Redis:
 
-Indexes: `creatorId`, `status`, and `createdAt`.
+```bash
+docker compose up -d
+```
 
-### votes
+### 2. Configure and run the backend
 
-- `_id`
-- `pollId`
-- `optionId`
-- `voterId`
-- `createdAt`
+```bash
+cd backend
+cp ../.env.example .env
+# Update the values in .env as needed
+go mod tidy
+go run ./cmd/server
+```
 
-A unique compound index on `(pollId, voterId)` prevents the same voter ID from voting twice for the same poll.
+### 3. Install and run the frontend
 
-## Poll Editing
+In a new terminal:
 
-Creators can edit active polls. Before the first vote, option structure can change freely. After voting starts, the number of options is kept fixed so historical vote counts cannot be accidentally discarded; existing option IDs/counts are preserved while their text and the question may be edited. Closed polls cannot be edited.
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-## Duplicate Vote Prevention
+Open the local URL printed by Vite, normally `http://localhost:5173`.
 
-The public client creates a random voter ID and stores it in `localStorage`. Every vote sends that ID in `X-Voter-ID`. MongoDB enforces uniqueness on `(pollId, voterId)`, so duplicate requests are rejected even if two requests race. This is intentionally described as **practical anonymous-session prevention**, not strong identity verification: a user who clears storage or changes devices can obtain another voter ID. A production system needing stronger identity guarantees can use authenticated voters, signed server-side cookies, email verification, or device/IP risk controls.
+## Environment Variables
 
-## Realtime Flow
+### Backend
 
-1. React opens `/api/polls/:id/ws`.
-2. Go registers the socket under that poll ID.
-3. A vote is POSTed to `/api/polls/:id/vote`.
-4. Gin validates the poll, option, expiration/status, and voter ID.
-5. MongoDB inserts the vote under the unique compound index.
-6. MongoDB atomically increments the selected option's stored count.
-7. Go reads the authoritative poll result and publishes an event to Redis.
-8. Every backend instance subscribed to `poll:*:updates` receives the event.
-9. The local WebSocket hub broadcasts to every connected viewer of that poll.
-10. React replaces its result state immediately — no polling or page refresh.
+| Variable | Description |
+|---|---|
+| `PORT` | HTTP server port |
+| `MONGO_URI` | MongoDB connection string |
+| `MONGO_DATABASE` | MongoDB database name |
+| `REDIS_URL` | Redis connection URL |
+| `JWT_SECRET` | Secret used to sign JWTs |
+| `JWT_EXPIRES_HOURS` | JWT lifetime in hours |
+| `FRONTEND_URL` | Frontend URL used by the application |
+| `CORS_ORIGIN` | Allowed frontend origin(s) |
 
-## Authentication Flow
+### Frontend
 
-1. Registration validates name/email/password and hashes the password with bcrypt.
-2. Login compares the submitted password with the bcrypt hash.
-3. A signed JWT containing the user ID is returned.
-4. Protected requests send `Authorization: Bearer <token>`.
-5. Gin middleware validates the signature and expiry and stores the user ID in request context.
-6. Controllers/services enforce creator ownership for update/delete/close operations.
+| Variable | Description |
+|---|---|
+| `VITE_API_URL` | Public backend API base URL |
+| `VITE_WS_URL` | Backend WebSocket base URL |
 
-Passwords and password hashes are never returned by the API.
+Never commit a real `.env` file or production secrets.
 
-## API
+## API Reference
 
-| Method | Endpoint | Auth | Purpose |
-|---|---|---|---|
-| POST | `/api/auth/register` | No | Create account |
-| POST | `/api/auth/login` | No | Authenticate |
-| GET | `/api/auth/me` | Yes | Current user |
-| POST | `/api/polls` | Yes | Create poll |
-| GET | `/api/polls` | Yes | Creator dashboard polls |
-| GET | `/api/polls/:id` | No | Read public poll |
-| PUT | `/api/polls/:id` | Yes | Update poll |
-| DELETE | `/api/polls/:id` | Yes | Delete poll |
-| POST | `/api/polls/:id/close` | Yes | Close poll |
-| POST | `/api/polls/:id/vote` | No | Cast anonymous vote |
-| GET | `/api/polls/:id/results` | No | Read current results |
-| GET | `/api/polls/:id/ws` | No | Live result WebSocket |
+| Method | Endpoint | Auth | Description |
+|---|---|:---:|---|
+| `POST` | `/api/auth/register` | No | Create an account |
+| `POST` | `/api/auth/login` | No | Authenticate a creator |
+| `GET` | `/api/auth/me` | Yes | Get the current user |
+| `POST` | `/api/polls` | Yes | Create a poll |
+| `GET` | `/api/polls` | Yes | List the creator's polls |
+| `GET` | `/api/polls/:id` | No | Get a public poll |
+| `PUT` | `/api/polls/:id` | Yes | Update an owned poll |
+| `DELETE` | `/api/polls/:id` | Yes | Delete an owned poll |
+| `POST` | `/api/polls/:id/close` | Yes | Close an owned poll |
+| `POST` | `/api/polls/:id/vote` | No | Submit a vote |
+| `GET` | `/api/polls/:id/results` | No | Get current results |
+| `GET` | `/api/polls/:id/ws` | No | Subscribe to live results |
 
-### Create poll request
+### Create a poll
 
 ```json
 {
@@ -152,7 +192,7 @@ Passwords and password hashes are never returned by the API.
 }
 ```
 
-### Vote request
+### Submit a vote
 
 ```json
 {
@@ -161,171 +201,96 @@ Passwords and password hashes are never returned by the API.
 }
 ```
 
-### Live event
+The client also sends the voter ID in the `X-Voter-ID` header. The server validates all vote data and does not trust client-provided totals.
+
+### Live result event
 
 ```json
 {
   "pollId": "...",
   "results": [
-    {"optionId": "...", "votes": 12},
-    {"optionId": "...", "votes": 8}
+    { "optionId": "...", "votes": 12 },
+    { "optionId": "...", "votes": 8 }
   ],
   "totalVotes": 20
 }
 ```
 
-## Validation and Errors
+## Data Model
 
-- `400` invalid request data
-- `401` missing/invalid authentication
-- `403` authenticated user does not own the resource
-- `404` resource not found
-- `409` duplicate vote or conflicting operation
-- `500` internal server error
+### Users
 
-Frontend error messages are translated into human-readable notifications.
+Stores creator identity and authentication data. Email addresses are unique, and passwords are stored only as bcrypt hashes.
 
-## Local Setup
+### Polls
 
-### 1. Start MongoDB and Redis
+Stores the creator, question, options, vote counts, status, timestamps, and optional expiration time. Polls have indexes for creator, status, and creation time.
 
-```bash
-docker compose up -d
-```
+### Votes
 
-### 2. Backend
+Stores the poll, selected option, voter ID, and creation time. A unique compound index on `(pollId, voterId)` prevents the same voter ID from voting more than once on a poll, including under concurrent requests.
 
-```bash
-cd backend
-cp ../.env.example .env
-# Edit secrets/URLs if necessary
-go mod tidy
-go run ./cmd/server
-```
+## Security and Validation
 
-### 3. Frontend
+- Passwords are hashed with bcrypt and never returned by the API.
+- JWT middleware protects creator-only operations.
+- Services verify resource ownership before update, close, or delete operations.
+- Poll and vote input is validated on the backend.
+- Strict CORS and WebSocket origin validation are supported.
+- Request sizes are bounded.
+- Vote requests use lightweight in-memory IP rate limiting.
+- Internal errors are returned as generic messages.
 
-```bash
-cd frontend
-npm install
-npm run dev
-```
+The included rate limiter is process-local. Multi-instance production deployments should move rate limiting to Redis or an edge provider.
 
-Open the Vite URL shown in the terminal, normally `http://localhost:5173`.
+## Testing and Quality Checks
 
-## Environment Variables
-
-The backend reads:
-
-- `PORT`
-- `MONGO_URI`
-- `MONGO_DATABASE`
-- `REDIS_URL`
-- `JWT_SECRET`
-- `JWT_EXPIRES_HOURS`
-- `FRONTEND_URL`
-- `CORS_ORIGIN`
-
-The frontend reads:
-
-- `VITE_API_URL`
-- `VITE_WS_URL`
-
-Never commit a real `.env` file.
-
-## Testing
-
-Backend unit tests cover validation, JWT creation/verification, and duplicate-vote service behavior with test-only repository doubles. The application itself always uses real MongoDB and Redis repositories in production/runtime code.
+Run backend tests:
 
 ```bash
 cd backend
 go test ./...
 ```
 
-Frontend:
+Build the frontend:
 
 ```bash
 cd frontend
 npm run build
 ```
 
-## Docker / Production
+Backend tests cover validation, JWT creation and verification, and duplicate-vote service behavior using test repositories where appropriate.
 
-The root Compose file intentionally runs MongoDB and Redis locally. For deployment, use managed services such as MongoDB Atlas and a managed Redis provider. Deploy the React frontend to a static hosting platform and the Go backend to a platform supporting long-running HTTP/WebSocket processes.
+## Production Deployment
 
-Production settings must provide:
+For production, use managed MongoDB and Redis services and deploy the frontend to a static hosting provider. Configure:
 
-- a strong random `JWT_SECRET`
-- managed MongoDB URI
-- managed Redis URL
-- exact frontend origin in CORS
-- HTTPS frontend URL
-- `wss://` WebSocket URL
-- `VITE_API_URL` pointing to the public backend API
-- `VITE_WS_URL` pointing to the public WebSocket API
+- A strong, randomly generated `JWT_SECRET`
+- Managed MongoDB and Redis connection URLs
+- The exact frontend origin in CORS settings
+- HTTPS for the frontend and `wss://` for WebSockets
+- Public `VITE_API_URL` and `VITE_WS_URL` values
+- A backend host that supports long-lived WebSocket connections
 
-Ensure the chosen backend host supports WebSockets and does not terminate idle connections too aggressively.
-
-## Security Considerations
-
-- bcrypt password hashing
-- JWT authentication
-- creator authorization checks
-- backend validation of all poll/vote data
-- MongoDB uniqueness for duplicate votes
-- strict CORS origin configuration
-- environment-based secrets
-- WebSocket origin validation
-- bounded request sizes
-- basic in-memory IP rate limiting on vote requests
-- generic internal error responses
-
-The included rate limiter is intentionally lightweight and per-process. A multi-instance production deployment should move rate limiting to Redis or the edge layer.
-
-## Scaling Considerations
-
-MongoDB remains the source of truth for persistent state. Redis Pub/Sub lets every backend instance receive the same event, while each instance broadcasts to its own connected WebSocket clients. Because Redis Pub/Sub is not durable, clients fetch the current results over REST on initial load/reconnect; the WebSocket stream is an acceleration mechanism, not the source of truth.
-
-For larger workloads, use Redis-backed rate limiting, connection-aware horizontal scaling, metrics/tracing, a durable event stream if event replay is required, and MongoDB transaction/consistency strategies appropriate to the deployment topology.
-
-## Design Decisions
-
-- **React:** component-based UI and simple reactive result rendering.
-- **Go/Gin:** fast, typed HTTP backend with clear service/repository boundaries.
-- **MongoDB:** natural document representation for polls/options and flexible metadata.
-- **Redis Pub/Sub:** distributes live events across backend instances without coupling sockets directly to vote requests.
-- **WebSocket:** server push is appropriate because all viewers need immediate updates.
-- **REST:** request/response semantics fit CRUD and vote commands.
+Redis Pub/Sub distributes events between backend instances, while each instance manages its own connected WebSocket clients. For larger workloads, consider Redis-backed rate limiting, metrics and tracing, connection-aware scaling, and a durable event stream if event replay is required.
 
 ## Known Limitations
 
-- Anonymous duplicate-vote prevention is session/device based and cannot prove real-world identity.
-- The lightweight rate limiter is process-local.
-- Redis Pub/Sub events are ephemeral; REST remains the recovery path after reconnects.
-- Public deployment credentials and domains must be supplied by the deployer.
+- Anonymous duplicate-vote prevention is browser/session based and cannot verify real-world identity.
+- The local rate limiter is per process.
+- Redis Pub/Sub messages are ephemeral; clients refresh results through REST after reconnecting.
+- Production domains and deployment credentials must be configured by the deployer.
 
 ## Demo Checklist
 
-1. Register a creator.
-2. Login.
-3. Create a poll with at least two options.
-4. Copy the public link.
-5. Open it in two browser windows.
-6. Vote in one window.
-7. Observe the other window update without refreshing.
-8. Return to the dashboard and edit/close/delete the poll.
+1. Register a creator account.
+2. Sign in and create a poll with at least two options.
+3. Copy the public poll URL.
+4. Open the URL in two browser windows.
+5. Vote in one window.
+6. Confirm the other window updates without a refresh.
+7. Return to the dashboard and edit, close, or delete the poll.
 
-## Internship Interview Talking Points
+## License
 
-Be prepared to explain:
-
-- why REST and WebSocket have different responsibilities
-- why Redis is required instead of direct in-process broadcasts
-- why MongoDB is the source of truth
-- how JWT authentication works
-- why bcrypt is used instead of encryption for passwords
-- how the compound vote index prevents races
-- why frontend vote counts are never trusted
-- why WebSocket reconnect performs a REST refresh
-- how multiple Go instances can share Redis Pub/Sub events
-- what changes would be needed for stronger anonymous identity and large-scale rate limiting
+No license has been specified for this project yet.
