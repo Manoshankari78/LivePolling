@@ -1,0 +1,1 @@
+export default function Toast({message,type='info',onClose}){if(!message)return null;return <div className={`toast ${type}`} role="alert"><span>{message}</span><button onClick={onClose}>×</button></div>}
