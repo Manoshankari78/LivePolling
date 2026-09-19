@@ -19,24 +19,7 @@ Authenticated creators register/login with JWT, create and manage polls, share a
 - Authentication: JWT
 - Password hashing: bcrypt
 - Local infrastructure: Docker Compose
-
-## Architecture
-
-```mermaid
-flowchart TD
-    Browser[React Browser]
-    API[Go + Gin REST API]
-    Mongo[(MongoDB)]
-    Redis[(Redis Pub/Sub)]
-    WS[Go WebSocket Hub]
-
-    Browser -->|REST / JSON| API
-    API -->|persist users polls votes| Mongo
-    API -->|PUBLISH poll:{id}:updates| Redis
-    Redis -->|PSUBSCRIBE poll:*:updates| WS
-    WS -->|WebSocket event| Browser
-```
-
+  
 ### REST vs WebSocket
 
 REST is used for request/response operations: registration, login, poll management, reading a poll, and submitting a vote. WebSocket is used only for server-to-client live result delivery. Redis Pub/Sub decouples persistence from the realtime broadcast layer and also allows multiple backend instances to receive the same poll event.
